@@ -88,7 +88,10 @@ def get_contract_from_context(state, context) :
         # constant
         if context.get('service_only') :
             return "**service_only**"
-        else :
+        elif context.get('contract_id') :
+            save_file = pcontract.Contract.read_from_ledger(state, context['contract_id'])
+            context.set('save_file', save_file)
+        else:
             return None
 
     # test to see if the save file exists & contains a contract; this

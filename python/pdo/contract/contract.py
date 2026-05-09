@@ -23,17 +23,68 @@ from pdo.contract.state import ContractState
 from pdo.contract.code import ContractCode, CompactContractCode
 import pdo.common.config as pconfig
 from pdo.service_client.service_data.service_data import ServiceDatabaseManager as service_data
-
+import base64
 import logging
 logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------
 # -----------------------------------------------------------------
+
+def _get_contract_state(contract_id, state_hash):
+    # TODO: what??
+    try:
+        cstate = ContractState.import_from_persistent_storage(
+            contract_id, state_hash, "http://localhost:7201"
+        )
+    except Exception:
+        cstate = None
+    if cstate is None:
+        raise RuntimeError(f"could not fetch state for {contract_id}")
+    return cstate
+
+
+def _build_contract_from_ledger(contract_id, ledger_config):
+    """Reconstruct a ``Contract`` object purely from the ledger.
+    No save_file, no source code (UpdateStateRequest only sends the code
+    hash on the wire after creation)."""
+    submitter = create_submitter(ledger_config)
+    info = submitter.get_contract_info(contract_id)
+    prov = submitter.get_contract_provisioning_info(contract_id)
+    state_info = submitter.get_current_state_hash(contract_id)
+    state_hash = state_info["state_hash"]
+
+    code = CompactContractCode(info["contract_code_hash"], "", "")
+
+    cstate = _get_contract_state(contract_id, state_hash)
+    contract = Contract(code, cstate, contract_id, info["pdo_contract_creator_pem_key"])
+    for entry in prov["enclaves_info"]:
+        contract.set_state_encryption_key(
+            entry["contract_enclave_id"], entry["encrypted_state_encryption_key"]
+        )
+
+    # # TODO: is this info needed?? if yes, how to get it from the ledger?
+    # # TODO: this doesn't make sense at all, but keeping it for now to see the skeleton
+    contract.set_replication_parameters(
+        num_provable_replicas=1,
+        availability_duration=60,
+        replication_set=["http://localhost:7201"],
+    )
+    return contract
+
 class Contract(object) :
     __path__ = '__contract_cache__'
     __extension__ = '.pdo'
 
     # -------------------------------------------------------
+    @classmethod
+    def read_from_ledger(cls, state, contract_id):
+        basename = f"{base64.b64encode(contract_id.encode()).decode()}.pdo"
+        ledger_config = state.get(["Ledger"])
+        data_directory = state.get(['Contract', 'DataDirectory'])
+        contract = _build_contract_from_ledger(contract_id, ledger_config)
+        contract.save_to_file(basename, data_dir=data_directory)
+        return basename
+
     @classmethod
     def read_from_file(cls, ledger_config, basename, data_dir = None) :
         filename = putils.build_file_name(basename, data_dir, cls.__path__, cls.__extension__)
