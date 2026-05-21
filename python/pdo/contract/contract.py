@@ -66,7 +66,7 @@ def _build_contract_from_ledger(contract_id, ledger_config):
     # # TODO: this doesn't make sense at all, but keeping it for now to see the skeleton
     contract.set_replication_parameters(
         num_provable_replicas=1,
-        availability_duration=60,
+        availability_duration=999999999,
         replication_set=["http://localhost:7201"],
     )
     return contract
