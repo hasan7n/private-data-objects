@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 import pdo.client.builder as pbuilder
 import pdo.client.builder.shell as pshell
 import pdo.client.builder.script as pscript
+from pdo.common.keys import ServiceKeys
 from pdo.submitter.create import create_submitter
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     'contract_info',
     'current_state',
     'state_info',
+    'user_contracts',
     'do_ledger',
     'load_commands',
 ]
@@ -141,11 +143,40 @@ class script_command_state_info(pscript.script_command_base) :
         result = submitter.get_state_details(contract_id, state_hash)
         return pbuilder.process_structured_invocation_result(result, kwargs.get('path'))
 
+## -----------------------------------------------------------------
+## -----------------------------------------------------------------
+class script_command_user_contracts(pscript.script_command_base) :
+    """Authenticated read of the caller's own contracts index. The request is
+    signed with the user's private key; the ledger only returns entries
+    matching the verifying key derived from that signature.
+    """
+    name = "user-contracts"
+    help = "List contracts created by the holder of the given key"
+
+    @classmethod
+    def add_arguments(cls, subparser) :
+        subparser.add_argument('--url', help='URL for the ledger', type=str)
+        subparser.add_argument('-k', '--key-file',
+            help='file holding the user signing key (defaults to the configured client key)',
+            type=str)
+        subparser.add_argument('-p', '--path', help='path to retrieve within the expression', nargs='+', default=[])
+
+    @classmethod
+    def invoke(cls, state, bindings, **kwargs) :
+        keyfile = kwargs.get('key_file') or state.private_key_file
+        keypath = state.get(['Key', 'SearchPath'])
+        user_keys = ServiceKeys.read_from_file(keyfile, keypath)
+
+        submitter = create_submitter_from_state(state, kwargs.get('url'))
+        result = submitter.get_user_contracts(user_keys)
+        return pbuilder.process_structured_invocation_result(result, kwargs.get('path'))
+
 ledger_key = script_command_ledger_key.invoke
 enclave_info = script_command_enclave_info.invoke
 contract_info = script_command_contract_info.invoke
 current_state = script_command_current_state.invoke
 state_info = script_command_state_info.invoke
+user_contracts = script_command_user_contracts.invoke
 
 ## -----------------------------------------------------------------
 ## Create the generic, shell independent version of the aggregate command
@@ -156,6 +187,7 @@ __subcommands__ = [
     script_command_contract_info,
     script_command_current_state,
     script_command_state_info,
+    script_command_user_contracts,
 ]
 do_ledger = pscript.create_shell_command('ledger', __subcommands__)
 
