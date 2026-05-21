@@ -30,17 +30,23 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------
 # -----------------------------------------------------------------
 
-def _get_contract_state(contract_id, state_hash):
-    # TODO: what??
-    try:
-        cstate = ContractState.import_from_persistent_storage(
-            contract_id, state_hash, "http://localhost:7201"
-        )
-    except Exception:
-        cstate = None
-    if cstate is None:
-        raise RuntimeError(f"could not fetch state for {contract_id}")
-    return cstate
+def _get_contract_state(contract_id, state_hash, sservice_candidates):
+    """Try each candidate sservice URL until one returns the state."""
+    if not sservice_candidates:
+        raise RuntimeError(
+            f"no storage services to fetch state for {contract_id}; "
+            "ledger storage_policy.allowed_storage_service_ids is empty")
+    last_err = None
+    for url in sservice_candidates:
+        try:
+            cstate = ContractState.import_from_persistent_storage(contract_id, state_hash, url)
+            if cstate is not None:
+                return cstate
+        except Exception as e:
+            last_err = e
+            continue
+    raise RuntimeError(
+        f"could not fetch state for {contract_id} from any of {sservice_candidates}: {last_err}")
 
 
 def _build_contract_from_ledger(contract_id, ledger_config):
@@ -53,21 +59,23 @@ def _build_contract_from_ledger(contract_id, ledger_config):
     state_info = submitter.get_current_state_hash(contract_id)
     state_hash = state_info["state_hash"]
 
+    storage_policy = info["storage_policy"]
+    sservice_candidates = storage_policy["allowed_storage_service_ids"]
+
     code = CompactContractCode(info["contract_code_hash"], "", "")
 
-    cstate = _get_contract_state(contract_id, state_hash)
+    cstate = _get_contract_state(contract_id, state_hash, sservice_candidates)
     contract = Contract(code, cstate, contract_id, info["pdo_contract_creator_pem_key"])
+    contract.contract_family = info["contract_family"]
     for entry in prov["enclaves_info"]:
         contract.set_state_encryption_key(
             entry["contract_enclave_id"], entry["encrypted_state_encryption_key"]
         )
 
-    # # TODO: is this info needed?? if yes, how to get it from the ledger?
-    # # TODO: this doesn't make sense at all, but keeping it for now to see the skeleton
     contract.set_replication_parameters(
-        num_provable_replicas=1,
-        availability_duration=999999999,
-        replication_set=["http://localhost:7201"],
+        num_provable_replicas=storage_policy["min_replication_factor"],
+        availability_duration=storage_policy["min_lease_duration_seconds"],
+        replication_set=sservice_candidates,
     )
     return contract
 

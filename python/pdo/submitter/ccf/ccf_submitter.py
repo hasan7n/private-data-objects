@@ -342,11 +342,18 @@ class CCFSubmitter(sub.Submitter):
 
         contract_info = self.ccf_client.submit_read_request(tx_method, tx_params)
 
-        # verify ccf signature
+        # verify ccf signature — bytes must be assembled in the exact order the
+        # C++ handler uses in pdo_tp.cpp (see Get_contract_info handler).
+        storage_policy = contract_info["storage_policy"]
         message = contract_id
         message += contract_info["pdo_contract_creator_pem_key"]
         message += contract_info["contract_code_hash"]
         message += contract_info["metadata_hash"]
+        message += contract_info["contract_family"]
+        message += str(storage_policy["min_replication_factor"])
+        for sid in storage_policy["allowed_storage_service_ids"]:
+            message += sid
+        message += str(storage_policy["min_lease_duration_seconds"])
 
         if not self.ccf_client.verify_ledger_signature(message, contract_info["signature"]):
             raise Exception("Invalid signature on Get Contract Info from CCF Ledger")
