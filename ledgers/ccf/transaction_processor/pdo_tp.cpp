@@ -884,11 +884,21 @@ namespace ccfapp
             auto metadata_hash = contract_r.value().contract_metadata_hash;
             auto encoded_metadata_hash = b64_from_raw(metadata_hash.data(), metadata_hash.size());
             auto creator_key = contract_r.value().contract_creator_verifying_key_PEM;
+            auto contract_family = contract_r.value().contract_family;
+            auto storage_policy = contract_r.value().storage_policy;
 
             string doc_to_sign = in.contract_id + creator_key + encoded_code_hash + encoded_metadata_hash;
+            doc_to_sign += contract_family;
+            doc_to_sign += to_string(storage_policy.min_replication_factor);
+            for (auto& sid : storage_policy.allowed_storage_service_ids) {
+                doc_to_sign += sid;
+            }
+            doc_to_sign += to_string(storage_policy.min_lease_duration_seconds);
             auto signature = TPHandlerRegistry ::sign_document(doc_to_sign);
 
-            return ccf::make_success(Get_contract_info::Out{creator_key, encoded_code_hash, encoded_metadata_hash, signature});
+            return ccf::make_success(Get_contract_info::Out{
+                creator_key, encoded_code_hash, encoded_metadata_hash,
+                contract_family, storage_policy, signature});
         };
 
         //======================================================================================================
