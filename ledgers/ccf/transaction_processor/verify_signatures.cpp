@@ -88,7 +88,9 @@ namespace ccfapp
         const string & verifying_key,
         const vector<uint8_t> & contract_code_hash,
         const string & nonce,
-        const vector<string> & provisioning_service_ids)
+        const vector<string> & provisioning_service_ids,
+        const string & contract_family,
+        const StoragePolicy & storage_policy)
     {
         vector<uint8_t> contents(verifying_key.begin(), verifying_key.end());
         contents.insert(contents.end(), contract_code_hash.begin(), contract_code_hash.end());
@@ -97,12 +99,30 @@ namespace ccfapp
         for(auto str: provisioning_service_ids) {
             message += str;
         }
-        message+=nonce;
+        message += nonce;
+        message += contract_family;
+        message += to_string(storage_policy.min_replication_factor);
+        for (auto str : storage_policy.allowed_storage_service_ids) {
+            message += str;
+        }
+        message += to_string(storage_policy.min_lease_duration_seconds);
+
         vector<uint8_t> temp(message.begin(), message.end());
 
         contents.insert(contents.end(), temp.begin(), temp.end());
 
         return verify_sig(signature, verifying_key, contents);
+    }
+
+    bool TPHandlerRegistry ::verify_get_user_contracts_request_signature(
+        const vector<uint8_t>& signature,
+        const string & user_verifying_key,
+        const string & nonce)
+    {
+        string message = user_verifying_key;
+        message += nonce;
+        vector<uint8_t> contents(message.begin(), message.end());
+        return verify_sig(signature, user_verifying_key, contents);
     }
 
     bool TPHandlerRegistry ::verify_pdo_transaction_signature_add_enclave(

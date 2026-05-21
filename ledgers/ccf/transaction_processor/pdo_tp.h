@@ -17,6 +17,7 @@
 #include "enclave_registry.h"
 #include "contract_registry.h"
 #include "ccl_registry.h"
+#include "user_contracts_registry.h"
 
 // CCF
 #include "crypto/key_pair.h"
@@ -37,6 +38,8 @@
 
 // others
 #include <map>
+#include <ctime>
+#include <string>
 #include <sgx_quote.h>
 
 using namespace std;
@@ -65,6 +68,9 @@ namespace ccfapp
     const int BASENAME_SIZE{32};
     const int ORIGINATOR_KEY_HASH_SIZE{64};
 
+    // freshness window (seconds) for signed-read nonces that carry a unix timestamp
+    const int64_t GET_USER_CONTRACTS_NONCE_WINDOW_SECONDS{300};
+
     // test method
     static constexpr auto PingMe = "ping";
 
@@ -83,6 +89,7 @@ namespace ccfapp
     static constexpr auto GET_CONTRACT_INFO = "get_contract_info";
     static constexpr auto GET_CURRENT_STATE_INFO_FOR_CONTRACT = "get_current_state_info_for_contract";
     static constexpr auto GET_DETAILS_ABOUT_STATE = "get_details_about_state";
+    static constexpr auto GET_USER_CONTRACTS = "get_user_contracts";
 
     //methods that create and read ledger authority keys.
     static constexpr auto GEN_SIGNING_KEY = "generate_signing_key_for_read_payloads";
@@ -102,6 +109,7 @@ namespace ccfapp
             kv::Map<string, EnclaveInfo> enclavetable; // key is encalve_id
             kv::Map<string, ContractInfo> contracttable; // key is contract_id
             kv::Map<string, ContractStateInfo> ccltable; // key is contract_id + state_hash (string addition)
+            kv::Map<string, std::vector<UserContractEntry>> user_contracts; // key is user verifying key PEM
             kv::Map<string, map<string, string>> signer; //There is at most one entry in this map. if there is an
                                                          //entry key="signer".  value is pubk:privk
 
@@ -138,7 +146,14 @@ namespace ccfapp
                 const string & verifying_key,
                 const vector<uint8_t>& contract_code_hash,
                 const string & nonce,
-                const vector<string> & provisioning_service_ids);
+                const vector<string> & provisioning_service_ids,
+                const string & contract_family,
+                const StoragePolicy & storage_policy);
+
+            bool verify_get_user_contracts_request_signature(
+                const vector<uint8_t>& signature,
+                const string & user_verifying_key,
+                const string & nonce);
 
             bool verify_pdo_transaction_signature_add_enclave(
                 const vector<uint8_t>& signature,

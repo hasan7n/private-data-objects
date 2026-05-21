@@ -44,6 +44,7 @@ namespace ccfapp
         enclavetable("enclaves"),
         contracttable("contracts"),
         ccltable("ccl_updates"),
+        user_contracts("user_contracts"),
         signer("signer")
     {
         ledger_signer_local = NULL;
@@ -431,7 +432,7 @@ namespace ccfapp
 
             // Verify Pdo transaction signature
             if (!verify_pdo_transaction_signature_register_contract(in.signature, in.contract_creator_verifying_key_PEM, \
-                    in.contract_code_hash, in.nonce, in.provisioning_service_ids)){
+                    in.contract_code_hash, in.nonce, in.provisioning_service_ids, in.contract_family, in.storage_policy)){
                 return ccf::make_error(
                     HTTP_STATUS_BAD_REQUEST, ccf::errors::InvalidInput, "Invalid PDO payload signature");
             }
@@ -445,6 +446,8 @@ namespace ccfapp
                 new_contract.provisioning_service_ids = in.provisioning_service_ids;
                 new_contract.is_active = true;
                 new_contract.current_state_hash=std::vector<uint8_t>{};
+                new_contract.contract_family = in.contract_family;
+                new_contract.storage_policy = in.storage_policy;
                 }
             catch(...){
                 return ccf::make_error(
@@ -453,6 +456,18 @@ namespace ccfapp
 
             //store the data
             contract_view->put(in.contract_id, new_contract);
+
+            // piggyback the reverse index update onto this transaction so it is
+            // always consistent with contracttable and needs no second signed RPC
+            auto user_contracts_view = ctx.tx.rw(user_contracts);
+            auto existing = user_contracts_view->get(in.contract_creator_verifying_key_PEM);
+            std::vector<UserContractEntry> entries =
+                existing.has_value() ? existing.value() : std::vector<UserContractEntry>{};
+            UserContractEntry entry;
+            entry.contract_id = in.contract_id;
+            entry.contract_family = in.contract_family;
+            entries.push_back(entry);
+            user_contracts_view->put(in.contract_creator_verifying_key_PEM, entries);
 
             // No need to commit the Tx, this is automatically taken care of !
 
@@ -973,6 +988,64 @@ namespace ccfapp
 
         };
 
+        //======================================================================================================
+        // get_user_contracts handler — signed-read, only the holder of the matching private key may query
+        auto get_user_contracts = [this](auto& ctx, const nlohmann::json& params) {
+            const auto in = params.get<Get_user_contracts::In>();
+
+            // Authenticate: the caller must prove they hold the private key for user_verifying_key
+            if (!verify_get_user_contracts_request_signature(in.signature, in.user_verifying_key, in.nonce)) {
+                return ccf::make_error(
+                    HTTP_STATUS_UNAUTHORIZED, ccf::errors::InvalidAuthenticationInfo,
+                    "Signature does not match the requested verifying key");
+            }
+
+            // Freshness: nonce is expected to be a unix timestamp (seconds, decimal string).
+            // Reject requests older than the configured window to limit replay.
+            try {
+                int64_t client_ts = std::stoll(in.nonce);
+                int64_t now_ts = static_cast<int64_t>(std::time(nullptr));
+                int64_t skew = now_ts - client_ts;
+                if (skew < -GET_USER_CONTRACTS_NONCE_WINDOW_SECONDS ||
+                    skew > GET_USER_CONTRACTS_NONCE_WINDOW_SECONDS) {
+                    return ccf::make_error(
+                        HTTP_STATUS_UNAUTHORIZED, ccf::errors::InvalidAuthenticationInfo,
+                        "Nonce timestamp outside the freshness window");
+                }
+            } catch (...) {
+                return ccf::make_error(
+                    HTTP_STATUS_BAD_REQUEST, ccf::errors::InvalidInput,
+                    "Nonce must be a unix-timestamp decimal string");
+            }
+
+            auto user_contracts_view = ctx.tx.rw(user_contracts);
+            auto r = user_contracts_view->get_globally_committed(in.user_verifying_key);
+            std::vector<UserContractEntry> entries =
+                r.has_value() ? r.value() : std::vector<UserContractEntry>{};
+
+            if (ledger_signer_local == NULL) {
+                auto signer_view = ctx.tx.rw(signer);
+                auto signer_global = signer_view->get_globally_committed("signer");
+                if (signer_global.has_value()) {
+                    auto key_pair = signer_global.value();
+                    auto privk_pem = crypto::Pem(key_pair["privk"]);
+                    ledger_signer_local = make_key_pair(privk_pem);
+                } else {
+                    return ccf::make_error(
+                        HTTP_STATUS_BAD_REQUEST, ccf::errors::InvalidInput,
+                        "Unable to locate ledger authority for signing read rpcs");
+                }
+            }
+
+            // Sign the response so the caller can verify the ledger actually said this.
+            // Serialize entries deterministically via nlohmann (no spaces, sorted keys).
+            nlohmann::json j = entries;
+            string doc_to_sign = in.user_verifying_key + in.nonce + j.dump();
+            auto signature = TPHandlerRegistry ::sign_document(doc_to_sign);
+
+            return ccf::make_success(Get_user_contracts::Out{entries, signature});
+        };
+
         // policy used by pdo clients. We will no longer generate a universal ccf user key and share with pdo clients
         // as did with ccf version 0.17
         const ccf::AuthnPolicies no_auth_policy = {ccf::no_auth_required};
@@ -1064,6 +1137,12 @@ namespace ccfapp
             GET_DETAILS_ABOUT_STATE,
             HTTP_POST,
             json_adapter(get_details_about_state),
+            no_auth_policy).install();
+
+        make_endpoint(
+            GET_USER_CONTRACTS,
+            HTTP_POST,
+            json_adapter(get_user_contracts),
             no_auth_policy).install();
 
         make_endpoint(

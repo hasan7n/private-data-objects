@@ -41,11 +41,24 @@ namespace ccf
 
   DECLARE_JSON_TYPE(ContractEnclaveInfo);
   DECLARE_JSON_REQUIRED_FIELDS(ContractEnclaveInfo,
-    contract_enclave_id, 
-    contract_id, 
-    encrypted_state_encryption_key, 
-    signature, 
+    contract_enclave_id,
+    contract_id,
+    encrypted_state_encryption_key,
+    signature,
     provisioning_key_state_secret_pairs);
+
+  struct StoragePolicy
+  {
+    uint32_t min_replication_factor;
+    std::vector<string> allowed_storage_service_ids; // empty = unconstrained
+    uint64_t min_lease_duration_seconds;
+  };
+
+  DECLARE_JSON_TYPE(StoragePolicy);
+  DECLARE_JSON_REQUIRED_FIELDS(StoragePolicy,
+    min_replication_factor,
+    allowed_storage_service_ids,
+    min_lease_duration_seconds);
 
   struct ContractInfo
   {
@@ -57,6 +70,8 @@ namespace ccf
     std::vector<ContractEnclaveInfo> enclave_info;
     std::vector<uint8_t> current_state_hash;
     bool is_active;
+    string contract_family;
+    StoragePolicy storage_policy;
   };
 
   DECLARE_JSON_TYPE(ContractInfo);
@@ -68,7 +83,9 @@ namespace ccf
     provisioning_service_ids,
     enclave_info,
     current_state_hash,
-    is_active);
+    is_active,
+    contract_family,
+    storage_policy);
 
   struct Register_contract {
     struct In {
@@ -78,6 +95,8 @@ namespace ccf
       std::vector<uint8_t> signature;
       string contract_id;
       std::vector<string> provisioning_service_ids;
+      string contract_family;
+      StoragePolicy storage_policy;
     };
   };
 
@@ -117,7 +136,7 @@ namespace ccf
 
   DECLARE_JSON_TYPE(Register_contract::In);
   DECLARE_JSON_REQUIRED_FIELDS(Register_contract::In, contract_code_hash, contract_creator_verifying_key_PEM, nonce, \
-    signature, contract_id, provisioning_service_ids);
+    signature, contract_id, provisioning_service_ids, contract_family, storage_policy);
 
   DECLARE_JSON_TYPE(Add_enclave::In);
   DECLARE_JSON_REQUIRED_FIELDS(Add_enclave::In, contract_id, \

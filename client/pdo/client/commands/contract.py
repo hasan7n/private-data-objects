@@ -257,8 +257,16 @@ def create_contract(state, source, **kwargs) :
         }
 
         provisioning_service_keys = [pc.identity for pc in pservice_clients]
+        # Map existing sservice-group settings to the ledger-recorded storage policy.
+        # `replicas` here is a list of sservice clients; ledger expects identifiers (strings).
+        storage_policy = {
+            'min_replication_factor': int(replica_count),
+            'allowed_storage_service_ids': [getattr(r, 'identity', str(r)) for r in replicas],
+            'min_lease_duration_seconds': int(replica_duration),
+        }
         contract_id = pcontract.register_contract(
-            ledger_config, client_keys, contract_code, provisioning_service_keys)
+            ledger_config, client_keys, contract_code, provisioning_service_keys,
+            contract_class, storage_policy)
 
         logger.debug('Registered contract with class %s and id %s', contract_class, contract_id)
         contract_state = pcontract.ContractState.create_new_state(contract_id)

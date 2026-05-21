@@ -159,6 +159,8 @@ class CCFSubmitter(sub.Submitter):
     def register_contract(self,
         contract_code_hash,
         provisioning_service_ids,
+        contract_family,
+        storage_policy,
         **extra_params):
 
         tx_method = "register_contract"
@@ -166,7 +168,9 @@ class CCFSubmitter(sub.Submitter):
         tx_params = PayloadBuilder.build_contract_registration_from_data(
             self.pdo_signer,
             contract_code_hash,
-            provisioning_service_ids
+            provisioning_service_ids,
+            contract_family,
+            storage_policy
             )
 
         try:
@@ -179,6 +183,26 @@ class CCFSubmitter(sub.Submitter):
         except Exception as e:
             logger.info('Register contract TXN failed: {}'.format(str(e)))
             raise
+
+# -----------------------------------------------------------------
+    def get_user_contracts(self, user_keys):
+        """Authenticated read: only the holder of user_keys.signing_key can list their contracts.
+
+        Returns the parsed response dict (entries + signature). Verifies the ledger
+        signature over the response.
+        """
+        tx_method = "get_user_contracts"
+        tx_params = PayloadBuilder.build_get_user_contracts_from_data(user_keys)
+
+        response = self.ccf_client.submit_read_request(tx_method, tx_params)
+
+        # verify ledger signature over (verifying_key || nonce || dump(entries))
+        message = user_keys.verifying_key + tx_params['nonce'] + json.dumps(
+            response['entries'], sort_keys=True, separators=(',', ':'))
+        if not self.ccf_client.verify_ledger_signature(message, response['signature']):
+            raise Exception("Invalid signature on Get User Contracts from CCF Ledger")
+
+        return response
 
 # -----------------------------------------------------------------
     def add_enclave_to_contract(self,
@@ -419,7 +443,9 @@ def compute_pdo_signature_contract_registration(
         verifying_key,
         contract_code_hash,
         provisioning_service_ids_array,
-        nonce) :
+        nonce,
+        contract_family,
+        storage_policy) :
 
     signer = keys.ServiceKeys(crypto.SIG_PrivateKey(signing_key))
 
@@ -427,7 +453,18 @@ def compute_pdo_signature_contract_registration(
     for s in provisioning_service_ids_array:
         message += crypto.string_to_byte_array(s)
     message += crypto.string_to_byte_array(nonce)
+    message += crypto.string_to_byte_array(contract_family)
+    message += crypto.string_to_byte_array(str(storage_policy['min_replication_factor']))
+    for s in storage_policy['allowed_storage_service_ids']:
+        message += crypto.string_to_byte_array(s)
+    message += crypto.string_to_byte_array(str(storage_policy['min_lease_duration_seconds']))
 
+    return signer.sign(message, encoding='raw')
+
+# -----------------------------------------------------------------
+def compute_get_user_contracts_signature(signing_key, user_verifying_key, nonce) :
+    signer = keys.ServiceKeys(crypto.SIG_PrivateKey(signing_key))
+    message = crypto.string_to_byte_array(user_verifying_key) + crypto.string_to_byte_array(nonce)
     return signer.sign(message, encoding='raw')
 
 # -----------------------------------------------------------------
@@ -521,21 +558,44 @@ class PayloadBuilder(object):
     def build_contract_registration_from_data(
         contract_creator_keys,
         contract_code_hash,
-        provisioning_service_ids):
+        provisioning_service_ids,
+        contract_family,
+        storage_policy):
         payloadblob = dict()
         payloadblob['contract_code_hash'] = contract_code_hash
         payloadblob['provisioning_service_ids'] = provisioning_service_ids
         payloadblob['contract_creator_verifying_key_PEM'] = contract_creator_keys.verifying_key
+        payloadblob['contract_family'] = contract_family
+        payloadblob['storage_policy'] = storage_policy
 
         # sign the payload after adding a nonce
         nonce = time.time().hex()
         payloadblob['nonce'] = nonce
-        payloadblob['signature'] = compute_pdo_signature_contract_registration(contract_creator_keys.signing_key,
-                contract_creator_keys.verifying_key, contract_code_hash, provisioning_service_ids, nonce)
+        payloadblob['signature'] = compute_pdo_signature_contract_registration(
+            contract_creator_keys.signing_key,
+            contract_creator_keys.verifying_key,
+            contract_code_hash,
+            provisioning_service_ids,
+            nonce,
+            contract_family,
+            storage_policy)
         payloadblob['contract_id'] = \
             crypto.byte_array_to_base64(crypto.compute_message_hash(payloadblob['signature']))
 
         return payloadblob
+
+# -----------------------------------------------------------------
+    @staticmethod
+    def build_get_user_contracts_from_data(user_keys):
+        # nonce is a unix-timestamp decimal string; the ledger rejects stale nonces
+        nonce = str(int(time.time()))
+        signature = compute_get_user_contracts_signature(
+            user_keys.signing_key, user_keys.verifying_key, nonce)
+        return {
+            'user_verifying_key': user_keys.verifying_key,
+            'nonce': nonce,
+            'signature': signature,
+        }
 
 # -----------------------------------------------------------------
     @staticmethod

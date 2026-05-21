@@ -279,6 +279,8 @@ def register_contract(
         creator_keys,
         contract_code,
         provisioning_service_ids,
+        contract_family,
+        storage_policy,
         **extra_params) :
 
     ss = create_submitter(ledger_config, pdo_signer = creator_keys)
@@ -286,6 +288,8 @@ def register_contract(
     txnsignature = ss.register_contract(
         contract_code.compute_hash(),
         provisioning_service_ids,
+        contract_family,
+        storage_policy,
         **extra_params
     )
 
