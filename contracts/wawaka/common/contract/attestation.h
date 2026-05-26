@@ -23,11 +23,20 @@
 #include "Types.h"
 #include "Util.h"
 
-#define LEDGER_ATTESTATION_SCHEMA               \
-    "{"                                         \
-        SCHEMA_KW(contract_code_hash,"") ","    \
-        SCHEMA_KW(metadata_hash,"") ","         \
-        SCHEMA_KW(signature,"")                 \
+#define STORAGE_POLICY_SCHEMA                                   \
+    "{"                                                         \
+        SCHEMA_KW(min_replication_factor, 0) ","                \
+        SCHEMA_KW(allowed_storage_service_ids, []) ","          \
+        SCHEMA_KW(min_lease_duration_seconds, 0)                \
+    "}"
+
+#define LEDGER_ATTESTATION_SCHEMA                               \
+    "{"                                                         \
+        SCHEMA_KW(contract_code_hash,"") ","                    \
+        SCHEMA_KW(metadata_hash,"") ","                         \
+        SCHEMA_KW(contract_family,"") ","                       \
+        SCHEMA_KWS(storage_policy, STORAGE_POLICY_SCHEMA) ","   \
+        SCHEMA_KW(signature,"")                                 \
     "}"
 
 #define CONTRACT_METADATA_SCHEMA                \

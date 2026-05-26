@@ -190,6 +190,7 @@ bool ww::contract::attestation::add_endpoint(
     const std::string contract_id(msg.get_string("contract_id"));
     const std::string ledger_code_hash(msg.get_string("ledger_attestation.contract_code_hash"));
     const std::string ledger_meta_hash(msg.get_string("ledger_attestation.metadata_hash"));
+    const std::string ledger_contract_family(msg.get_string("ledger_attestation.contract_family"));
     const std::string ledger_signature(msg.get_string("ledger_attestation.signature"));
     const std::string verifying_key(msg.get_string("contract_metadata.verifying_key"));
     const std::string encryption_key(msg.get_string("contract_metadata.encryption_key"));
@@ -206,6 +207,27 @@ bool ww::contract::attestation::add_endpoint(
         std::copy(creator.begin(), creator.end(), std::back_inserter(buffer));
         std::copy(ledger_code_hash.begin(), ledger_code_hash.end(), std::back_inserter(buffer));
         std::copy(ledger_meta_hash.begin(), ledger_meta_hash.end(), std::back_inserter(buffer));
+
+        // ledger now also signs over contract_family and storage_policy fields,
+        // in the order used by pdo_tp.cpp Get_contract_info handler
+        std::copy(ledger_contract_family.begin(), ledger_contract_family.end(), std::back_inserter(buffer));
+
+        const std::string min_repl_str = std::to_string((uint64_t)msg.get_number(
+            "ledger_attestation.storage_policy.min_replication_factor"));
+        std::copy(min_repl_str.begin(), min_repl_str.end(), std::back_inserter(buffer));
+
+        ww::value::Array sids;
+        if (! msg.get_value("ledger_attestation.storage_policy.allowed_storage_service_ids", sids))
+            return rsp.error("missing allowed_storage_service_ids in ledger attestation");
+        for (size_t i = 0; i < sids.get_count(); i++)
+        {
+            const std::string sid(sids.get_string(i));
+            std::copy(sid.begin(), sid.end(), std::back_inserter(buffer));
+        }
+
+        const std::string min_lease_str = std::to_string((uint64_t)msg.get_number(
+            "ledger_attestation.storage_policy.min_lease_duration_seconds"));
+        std::copy(min_lease_str.begin(), min_lease_str.end(), std::back_inserter(buffer));
 
         ww::types::ByteArray signature;
         if (! ww::crypto::b64_decode(ledger_signature, signature))
