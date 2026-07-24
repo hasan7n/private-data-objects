@@ -92,6 +92,19 @@ namespace attestation
     bool set_code_hash(const ww::types::ByteArray& code_hash);
     bool get_code_hash(ww::types::ByteArray& code_hash);
 
+    // Verify the ledger's signature over the attestation carried in msg. msg must
+    // hold "contract_id" and a "ledger_attestation" object (LEDGER_ATTESTATION_SCHEMA);
+    // creator is the id the ledger signed over and ledger_key is the ledger's
+    // verifying key. Shared by any contract that consumes another contract object's
+    // ledger attestation (e.g. add_endpoint, wallet_key_authority).
+    bool verify_ledger_attestation(const Message& msg, const std::string& creator, const std::string& ledger_key);
+
+    // Verify that the contract metadata in msg ("contract_id" + "contract_metadata")
+    // hashes to the metadata hash the ledger attested
+    // (ledger_attestation.metadata_hash), binding the contract id to its verifying
+    // and encryption keys.
+    bool verify_metadata_binding(const Message& msg);
+
     bool add_endpoint(const std::string& contract_id, const std::string& verifying_key, const std::string& encryption_key);
     bool get_endpoint(const std::string& contract_id, std::string& verifying_key, std::string& encryption_key);
 }; // attestation

@@ -166,6 +166,119 @@ bool ww::contract::attestation::get_contract_code_metadata(
 }
 
 // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+// NAME: verify_ledger_attestation
+//
+// Verify the ledger's signature over the attestation carried in msg.
+// The signed buffer is contract_id, creator, code hash, metadata hash,
+// contract family, then the storage policy fields, in the order used by
+// pdo_tp.cpp's Get_contract_info handler. Shared by every contract that
+// consumes another contract object's ledger attestation.
+// XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+bool ww::contract::attestation::verify_ledger_attestation(
+    const Message& msg,
+    const std::string& creator,
+    const std::string& ledger_key)
+{
+    const std::string contract_id(msg.get_string("contract_id"));
+    const std::string ledger_code_hash(msg.get_string("ledger_attestation.contract_code_hash"));
+    const std::string ledger_meta_hash(msg.get_string("ledger_attestation.metadata_hash"));
+    const std::string ledger_contract_family(msg.get_string("ledger_attestation.contract_family"));
+    const std::string ledger_signature(msg.get_string("ledger_attestation.signature"));
+
+    ww::types::ByteArray buffer;
+    std::copy(contract_id.begin(), contract_id.end(), std::back_inserter(buffer));
+    std::copy(creator.begin(), creator.end(), std::back_inserter(buffer));
+    std::copy(ledger_code_hash.begin(), ledger_code_hash.end(), std::back_inserter(buffer));
+    std::copy(ledger_meta_hash.begin(), ledger_meta_hash.end(), std::back_inserter(buffer));
+
+    // ledger now also signs over contract_family and storage_policy fields,
+    // in the order used by pdo_tp.cpp Get_contract_info handler
+    std::copy(ledger_contract_family.begin(), ledger_contract_family.end(), std::back_inserter(buffer));
+
+    const std::string min_repl_str = std::to_string((uint64_t)msg.get_number(
+        "ledger_attestation.storage_policy.min_replication_factor"));
+    std::copy(min_repl_str.begin(), min_repl_str.end(), std::back_inserter(buffer));
+
+    ww::value::Array sids;
+    if (! msg.get_value("ledger_attestation.storage_policy.allowed_storage_service_ids", sids))
+    {
+        CONTRACT_SAFE_LOG(3, "missing allowed_storage_service_ids in ledger attestation");
+        return false;
+    }
+    for (size_t i = 0; i < sids.get_count(); i++)
+    {
+        const std::string sid(sids.get_string(i));
+        std::copy(sid.begin(), sid.end(), std::back_inserter(buffer));
+    }
+
+    const std::string min_lease_str = std::to_string((uint64_t)msg.get_number(
+        "ledger_attestation.storage_policy.min_lease_duration_seconds"));
+    std::copy(min_lease_str.begin(), min_lease_str.end(), std::back_inserter(buffer));
+
+    ww::types::ByteArray signature;
+    if (! ww::crypto::b64_decode(ledger_signature, signature))
+    {
+        CONTRACT_SAFE_LOG(3, "failed to decode ledger signature");
+        return false;
+    }
+    if (! ww::crypto::ecdsa::verify_signature(buffer, ledger_key, signature))
+    {
+        CONTRACT_SAFE_LOG(3, "failed to verify ledger signature");
+        return false;
+    }
+
+    return true;
+}
+
+// XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+// NAME: verify_metadata_binding
+//
+// Verify that the contract metadata hashes to the metadata hash the ledger
+// attested, which binds the contract id to its verifying and encryption keys.
+// XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+bool ww::contract::attestation::verify_metadata_binding(const Message& msg)
+{
+    const std::string contract_id(msg.get_string("contract_id"));
+    const std::string ledger_meta_hash(msg.get_string("ledger_attestation.metadata_hash"));
+    const std::string verifying_key(msg.get_string("contract_metadata.verifying_key"));
+    const std::string encryption_key(msg.get_string("contract_metadata.encryption_key"));
+
+    ww::types::ByteArray idhash;
+    if (! ww::crypto::b64_decode(contract_id, idhash))
+    {
+        CONTRACT_SAFE_LOG(3, "failed to decode the contract id");
+        return false;
+    }
+
+    ww::types::ByteArray buffer;
+    std::copy(idhash.begin(), idhash.end(), std::back_inserter(buffer));
+    std::copy(verifying_key.begin(), verifying_key.end(), std::back_inserter(buffer));
+    std::copy(encryption_key.begin(), encryption_key.end(), std::back_inserter(buffer));
+
+    ww::types::ByteArray computed_hash;
+    if (! ww::crypto::crypto_hash(buffer, computed_hash))
+    {
+        CONTRACT_SAFE_LOG(3, "failed to compute the hash for metadata comparison");
+        return false;
+    }
+
+    ww::types::ByteArray decoded_ledger_meta_hash;
+    if (! ww::crypto::b64_decode(ledger_meta_hash, decoded_ledger_meta_hash))
+    {
+        CONTRACT_SAFE_LOG(3, "failed to decode ledger metadata hash");
+        return false;
+    }
+
+    if (computed_hash != decoded_ledger_meta_hash)
+    {
+        CONTRACT_SAFE_LOG(3, "computed metadata hash not the same as the stored hash");
+        return false;
+    }
+
+    return true;
+}
+
+// XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 // NAME: add_endpoint
 //
 // Contract method to verify the attestation of a contract object
@@ -189,9 +302,6 @@ bool ww::contract::attestation::add_endpoint(
 
     const std::string contract_id(msg.get_string("contract_id"));
     const std::string ledger_code_hash(msg.get_string("ledger_attestation.contract_code_hash"));
-    const std::string ledger_meta_hash(msg.get_string("ledger_attestation.metadata_hash"));
-    const std::string ledger_contract_family(msg.get_string("ledger_attestation.contract_family"));
-    const std::string ledger_signature(msg.get_string("ledger_attestation.signature"));
     const std::string verifying_key(msg.get_string("contract_metadata.verifying_key"));
     const std::string encryption_key(msg.get_string("contract_metadata.encryption_key"));
     const std::string code_nonce(msg.get_string("contract_code_metadata.code_nonce"));
@@ -200,43 +310,13 @@ bool ww::contract::attestation::add_endpoint(
     // of the contract being added so the creator id will come from the environment
     const std::string creator(env.originator_id_);
 
-    // verify the ledger's signature on the metadata_hash and code_hash
-    {
-        ww::types::ByteArray buffer;
-        std::copy(contract_id.begin(), contract_id.end(), std::back_inserter(buffer));
-        std::copy(creator.begin(), creator.end(), std::back_inserter(buffer));
-        std::copy(ledger_code_hash.begin(), ledger_code_hash.end(), std::back_inserter(buffer));
-        std::copy(ledger_meta_hash.begin(), ledger_meta_hash.end(), std::back_inserter(buffer));
+    // verify the ledger's signature on the attestation
+    if (! verify_ledger_attestation(msg, creator, ledger_key))
+        return rsp.error("failed to verify ledger signature");
 
-        // ledger now also signs over contract_family and storage_policy fields,
-        // in the order used by pdo_tp.cpp Get_contract_info handler
-        std::copy(ledger_contract_family.begin(), ledger_contract_family.end(), std::back_inserter(buffer));
-
-        const std::string min_repl_str = std::to_string((uint64_t)msg.get_number(
-            "ledger_attestation.storage_policy.min_replication_factor"));
-        std::copy(min_repl_str.begin(), min_repl_str.end(), std::back_inserter(buffer));
-
-        ww::value::Array sids;
-        if (! msg.get_value("ledger_attestation.storage_policy.allowed_storage_service_ids", sids))
-            return rsp.error("missing allowed_storage_service_ids in ledger attestation");
-        for (size_t i = 0; i < sids.get_count(); i++)
-        {
-            const std::string sid(sids.get_string(i));
-            std::copy(sid.begin(), sid.end(), std::back_inserter(buffer));
-        }
-
-        const std::string min_lease_str = std::to_string((uint64_t)msg.get_number(
-            "ledger_attestation.storage_policy.min_lease_duration_seconds"));
-        std::copy(min_lease_str.begin(), min_lease_str.end(), std::back_inserter(buffer));
-
-        ww::types::ByteArray signature;
-        if (! ww::crypto::b64_decode(ledger_signature, signature))
-            return rsp.error("failed to decode ledger signature");
-        if (! ww::crypto::ecdsa::verify_signature(buffer, ledger_key, signature))
-            return rsp.error("failed to verify ledger signature");
-    }
-
-    // verify that the code hash matches the code hash in the ledger
+    // verify that the code hash matches the code hash in the ledger; unlike the
+    // signature and metadata checks, this one assumes the endpoint runs the same
+    // code as this contract, so it is specific to add_endpoint
     {
         // we compute the merkle root using the hash of our own code
         // so we know the hash of the other if it matches
@@ -266,27 +346,8 @@ bool ww::contract::attestation::add_endpoint(
     }
 
     // verify that the metadata hash matches the metadata hash in the ledger
-    {
-        ww::types::ByteArray idhash;
-        if (! ww::crypto::b64_decode(contract_id, idhash))
-            return rsp.error("failed to decode the contract id");
-
-        ww::types::ByteArray buffer;
-        std::copy(idhash.begin(), idhash.end(), std::back_inserter(buffer));
-        std::copy(verifying_key.begin(), verifying_key.end(), std::back_inserter(buffer));
-        std::copy(encryption_key.begin(), encryption_key.end(), std::back_inserter(buffer));
-
-        ww::types::ByteArray computed_hash;
-        if (! ww::crypto::crypto_hash(buffer, computed_hash))
-            return rsp.error("failed to compute the hash for metadata comparison");
-
-        ww::types::ByteArray decoded_ledger_meta_hash;
-        if (! ww::crypto::b64_decode(ledger_meta_hash, decoded_ledger_meta_hash))
-            return rsp.error("failed to decoded ledger code hash");
-
-        if (computed_hash != decoded_ledger_meta_hash)
-            return rsp.error("computed metadata hash not the same as the stored hash");
-    }
+    if (! verify_metadata_binding(msg))
+        return rsp.error("computed metadata hash not the same as the stored hash");
 
     // now store the information about the endpoint
     if (! add_endpoint(contract_id, verifying_key, encryption_key))
